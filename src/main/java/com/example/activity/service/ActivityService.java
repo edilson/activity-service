@@ -1,0 +1,43 @@
+package com.example.activity.service;
+
+import com.example.activity.domain.*;
+import com.example.activity.repository.*;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
+import java.util.UUID;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+@Service
+public class ActivityService {
+    private final ActivityRepository activities; private final OutboxRepository outbox; private final PolylineService polylines;
+    private final ActivitySourceRepository sources;
+    private final ObjectMapper json;
+    public ActivityService(ActivityRepository activities, OutboxRepository outbox, PolylineService polylines, ActivitySourceRepository sources, ObjectMapper json) {
+        this.activities = activities; this.outbox = outbox; this.polylines = polylines;
+        this.sources = sources; this.json = json;
+    }
+    @Transactional
+    public Activity save(String owner, String source, ActivityData data) {
+        return save(owner, source, data, new SourceData(null, null, null, null, null));
+    }
+    @Transactional
+    public Activity save(String owner, String source, ActivityData data, SourceData sourceData) {
+        Activity activity = activities.save(new Activity(owner, source, data, polylines.encode(data.route())));
+        sources.save(new ActivitySource(activity.getId(), sourceData, json.valueToTree(data.route())));
+        outbox.save(new OutboxEvent(activity)); return activity;
+    }
+    @Transactional(readOnly = true)
+    public ActivitySource source(String owner, UUID id) {
+        get(owner, id);
+        return sources.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Source data is unavailable for this legacy import"));
+    }
+    @Transactional(readOnly = true)
+    public Activity get(String owner, UUID id) {
+        return activities.findByIdAndOwner(id, owner).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Activity not found"));
+    }
+    @Transactional(readOnly = true)
+    public Page<Activity> list(String owner, int page) { return activities.findByOwner(owner, PageRequest.of(Math.max(0, page), 20, Sort.by("createdAt").descending())); }
+}

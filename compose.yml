@@ -1,0 +1,90 @@
+services:
+  app:
+    build: .
+    ports:
+      - '127.0.0.1:8080:8080'
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/activities
+      DATABASE_USERNAME: activity
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}
+      AUTH_MODE: ${AUTH_MODE:-cognito}
+      API_USERNAME: ${API_USERNAME:-activity}
+      API_PASSWORD: ${API_PASSWORD:-}
+      COOKIE_SECURE: 'false'
+      COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_CLIENT_SECRET: ${COGNITO_CLIENT_SECRET:-}
+      COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+      COGNITO_REDIRECT_URI: http://localhost:8080/login/oauth2/code/cognito
+      PUBLIC_BASE_URL: http://localhost:8080
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
+      OAUTH_ENCRYPTION_KEY: ${OAUTH_ENCRYPTION_KEY:-}
+      POLAR_CLIENT_ID: ${POLAR_CLIENT_ID:-}
+      POLAR_CLIENT_SECRET: ${POLAR_CLIENT_SECRET:-}
+      GARMIN_CLIENT_ID: ${GARMIN_CLIENT_ID:-}
+      GARMIN_CLIENT_SECRET: ${GARMIN_CLIENT_SECRET:-}
+      SQS_ENABLED: ${SQS_ENABLED:-false}
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_SHORT_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/activities-short.fifo
+      SQS_LONG_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/activities-long.fifo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      queue-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '--silent', 'http://localhost:8080/actuator/health']
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 6
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: activities
+      POSTGRES_USER: activity
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U activity -d activities']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  localstack:
+    image: localstack/localstack:4
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - '127.0.0.1:4566:4566'
+    healthcheck:
+      test: ['CMD', 'awslocal', 'sqs', 'list-queues']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  queue-init:
+    image: amazon/aws-cli:latest
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_PAGER: ''
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        aws --endpoint-url http://localstack:4566 sqs create-queue --queue-name activities-short.fifo --attributes FifoQueue=true
+        aws --endpoint-url http://localstack:4566 sqs create-queue --queue-name activities-long.fifo --attributes FifoQueue=true
+    depends_on:
+      localstack:
+        condition: service_healthy
+volumes:
+  postgres-data:

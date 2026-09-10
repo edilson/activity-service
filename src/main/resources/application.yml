@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: activity-service
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/activities}
+    username: ${DATABASE_USERNAME:activity}
+    password: ${DATABASE_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  security:
+    user:
+      name: ${API_USERNAME:activity}
+      password: ${API_PASSWORD:}
+server:
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${COOKIE_SECURE:true}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+activity:
+  auth:
+    mode: ${AUTH_MODE:cognito}
+  cognito:
+    issuer: ${COGNITO_ISSUER:}
+    client-id: ${COGNITO_CLIENT_ID:}
+    client-secret: ${COGNITO_CLIENT_SECRET:}
+    domain: ${COGNITO_DOMAIN:}
+    redirect-uri: ${COGNITO_REDIRECT_URI:http://localhost:8080/login/oauth2/code/cognito}
+  firecrawl:
+    base-url: https://api.firecrawl.dev
+    api-key: ${FIRECRAWL_API_KEY:}
+  groq:
+    base-url: https://api.groq.com
+    api-key: ${GROQ_API_KEY:}
+    model: ${GROQ_VISION_MODEL:qwen/qwen3.6-27b}
+  sqs:
+    enabled: ${SQS_ENABLED:false}
+    region: ${AWS_REGION:us-east-1}
+    endpoint: ${SQS_ENDPOINT:}
+    short-queue-url: ${SQS_SHORT_QUEUE_URL:}
+    long-queue-url: ${SQS_LONG_QUEUE_URL:}
+  oauth:
+    encryption-key: ${OAUTH_ENCRYPTION_KEY:}
+    public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
+    providers:
+      polar:
+        client-id: ${POLAR_CLIENT_ID:}
+        client-secret: ${POLAR_CLIENT_SECRET:}
+        authorization-uri: https://flow.polar.com/oauth2/authorization
+        token-uri: https://polarremote.com/v2/oauth2/token
+        user-uri: https://www.polaraccesslink.com/v3/users
+      garmin:
+        client-id: ${GARMIN_CLIENT_ID:}
+        client-secret: ${GARMIN_CLIENT_SECRET:}
+        authorization-uri: https://connect.garmin.com/oauth2Confirm
+        token-uri: https://diauth.garmin.com/di-oauth2-service/oauth/token
+        user-uri: https://apis.garmin.com/wellness-api/rest/user/id
