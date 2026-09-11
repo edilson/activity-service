@@ -12,7 +12,8 @@ import static org.assertj.core.api.Assertions.*;
 class ActivityServiceTest {
     ActivityRepository repository = mock(ActivityRepository.class); OutboxRepository outbox = mock(OutboxRepository.class);
     ActivitySourceRepository sources = mock(ActivitySourceRepository.class);
-    ActivityService service = new ActivityService(repository, outbox, new PolylineService(), sources, new com.fasterxml.jackson.databind.ObjectMapper());
+    ObjectStorageService storage = mock(ObjectStorageService.class);
+    ActivityService service = new ActivityService(repository, outbox, new PolylineService(), sources, new com.fasterxml.jackson.databind.ObjectMapper(), storage);
     @Test void savesActivityAndMatchingOutboxEvent() {
         when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
         var activity = service.save("rider", "FIT", TestSupport.data(100000));
@@ -26,4 +27,11 @@ class ActivityServiceTest {
         verify(repository).findByIdAndOwner(id, "rider");
     }
     @Test void clampsNegativePages() { service.list("rider", -1); verify(repository).findByOwner(eq("rider"), argThat(page -> page.getPageNumber() == 0 && page.getPageSize() == 20)); }
+    @Test void optionalNamesCanBeSetAndCleared() {
+        var activity = TestSupport.activity(1000); when(repository.findByIdAndOwner(activity.getId(), "rider")).thenReturn(Optional.of(activity));
+        when(repository.save(any())).thenAnswer(i -> i.getArgument(0));
+        assertThat(service.rename("rider", activity.getId(), "  Sunday ride  ").getName()).isEqualTo("Sunday ride");
+        assertThat(service.rename("rider", activity.getId(), null).getName()).isNull();
+        assertThatThrownBy(() -> service.rename("rider", activity.getId(), "x".repeat(256))).isInstanceOf(InvalidActivityException.class);
+    }
 }

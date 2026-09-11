@@ -30,6 +30,10 @@ management:
       exposure:
         include: health
 activity:
+  s3:
+    bucket: ${S3_BUCKET:activity-files}
+    region: ${AWS_REGION:us-east-1}
+    endpoint: ${S3_ENDPOINT:}
   auth:
     mode: ${AUTH_MODE:cognito}
   cognito:

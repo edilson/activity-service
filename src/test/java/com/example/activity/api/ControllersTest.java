@@ -35,21 +35,21 @@ class ControllersTest {
     }
     @Test void uploadsAndReturnsCreatedLocation() throws Exception {
         var activity = TestSupport.activity(1000);
-        when(ingestion.file(eq("rider"), eq("ride.gpx"), any())).thenReturn(activity);
+        when(ingestion.file(eq("rider"), eq("ride.gpx"), any(), isNull())).thenReturn(activity);
         mvc.perform(multipart("/api/activities/files").file(new MockMultipartFile("file", "ride.gpx", "application/gpx+xml", new byte[]{1}))
             .with(user("rider")).with(csrf())).andExpect(status().isCreated()).andExpect(header().string("Location", "/api/activities/" + activity.getId()))
             .andExpect(jsonPath("$.distanceMeters").value(1000));
     }
     @Test void importsStravaAndValidatesBody() throws Exception {
-        when(ingestion.strava("rider", "url")).thenReturn(TestSupport.activity(1000));
+        when(ingestion.strava("rider", "url", null)).thenReturn(TestSupport.activity(1000));
         mvc.perform(post("/api/activities/strava").with(user("rider")).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"url\":\"url\"}"))
             .andExpect(status().isCreated());
         mvc.perform(post("/api/activities/strava").with(user("rider")).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"url\":\"\"}"))
             .andExpect(status().isBadRequest());
     }
     @Test void mapsExtractionAndProviderErrors() throws Exception {
-        when(ingestion.strava("rider", "missing")).thenThrow(new InvalidActivityException("Missing elevation"));
-        when(ingestion.strava("rider", "upstream")).thenThrow(new UpstreamException("Provider unavailable"));
+        when(ingestion.strava("rider", "missing", null)).thenThrow(new InvalidActivityException("Missing elevation"));
+        when(ingestion.strava("rider", "upstream", null)).thenThrow(new UpstreamException("Provider unavailable"));
         mvc.perform(post("/api/activities/strava").with(user("rider")).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"url\":\"missing\"}"))
             .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.detail").value("Missing elevation"));
         mvc.perform(post("/api/activities/strava").with(user("rider")).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"url\":\"upstream\"}"))
@@ -82,11 +82,13 @@ class ControllersTest {
         var source = new com.example.activity.domain.ActivitySource(id,
             new com.example.activity.domain.SourceData("ride.fit", "application/octet-stream", new byte[]{0, 1, -1}, null, json.createObjectNode().put("extra", 42)), json.createArrayNode());
         when(activities.source("rider", id)).thenReturn(source);
+        when(activities.download("rider", id)).thenReturn(new byte[]{0, 1, -1});
         mvc.perform(get("/api/activities/" + id + "/source").with(user("rider"))).andExpect(status().isOk())
             .andExpect(jsonPath("$.providerResponse.extra").value(42)).andExpect(jsonPath("$.originalFile").doesNotExist());
         mvc.perform(get("/api/activities/" + id + "/file").with(user("rider"))).andExpect(status().isOk())
             .andExpect(content().bytes(new byte[]{0, 1, -1})).andExpect(header().string("Content-Type", "application/octet-stream"));
-        when(activities.source("other", id)).thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));
+        when(activities.download("other", id)).thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));
         mvc.perform(get("/api/activities/" + id + "/file").with(user("other"))).andExpect(status().isNotFound());
     }
 }
+

@@ -1,6 +1,6 @@
 # Cycling activity service
 
-Java 21 / Spring Boot service for GPX, FIT, PNG/JPEG screenshots, and public Strava activity links. PostgreSQL stores normalized activities, original source files, extraction responses, route coordinates, encrypted provider connections, and the transactional SQS outbox.
+Java 21 / Spring Boot service for GPX, FIT, PNG/JPEG screenshots, and public Strava activity links. S3 stores original activity files and user photos. PostgreSQL stores their object paths, normalized activities, extraction responses, route coordinates, encrypted provider connections, and the transactional SQS outbox.
 
 ## Run locally with Docker Compose
 
@@ -13,7 +13,7 @@ docker compose up --build -d
 docker compose logs -f app
 ```
 
-Compose builds the non-root application container, starts PostgreSQL 17 with a persistent volume, starts LocalStack, creates both FIFO queues, waits for dependencies, and exposes the application at http://localhost:8080. Ports are bound to localhost. The app connects to `postgres:5432` and `localstack:4566` inside the Docker network. `SQS_ENABLED=true` enables local publishing; otherwise events remain pending in PostgreSQL.
+Compose builds the non-root application container, starts PostgreSQL 17 and LocalStack with named data volumes, creates both FIFO queues and the `activity-files` S3 bucket, waits for dependencies, and exposes the application at http://localhost:8080. Ports are bound to localhost. The app connects to `postgres:5432` and `localstack:4566` inside the Docker network. `SQS_ENABLED=true` enables local publishing; otherwise events remain pending in PostgreSQL. File imports and photo uploads always require S3, regardless of the SQS setting.
 
 For offline development without an AWS account, explicitly set `AUTH_MODE=local` and a strong `API_PASSWORD` in `.env`. This enables the single local HTTP Basic account (`API_USERNAME`, default `activity`). Cognito is the default authentication mode; local authentication is not enabled alongside Cognito.
 
@@ -51,14 +51,32 @@ Browser/session writes require CSRF protection: get `/api/csrf`, retain its sess
 ## Stored activity data
 
 - `activities`: distance in meters, duration in seconds, elevation gain in meters, encoded polyline, source type, owner, and import timestamp.
-- `activity_sources`: exact original GPX/FIT/screenshot bytes (`bytea`), filename, detected/assigned content type, original submitted URL, full provider response (`jsonb`), and extracted route coordinates (`jsonb`).
+- `activity_sources`: S3 bucket, object key, stable `s3://bucket/key` URL, byte size, filename, detected/assigned content type, original submitted URL, full provider response (`jsonb`), and extracted route coordinates (`jsonb`). New file bytes are uploaded to S3, not stored in PostgreSQL.
+- `activity_photos`: activity ID, filename, detected content type, S3 bucket/key/URL, byte size, and creation time. Each activity can have multiple photos.
 - GPX and FIT originals retain all source fields, including extension/developer fields and samples that are not mapped into normalized columns. Download the original for complete reprocessing.
 - Groq responses retain all returned fields and the extracted JSON text. The extraction prompt requests additional visible activity fields (heart rate, cadence, speed, power, device, date, splits, etc.). The original screenshot is also retained because OCR cannot guarantee that every visible value is extracted accurately.
 - Firecrawl requests structured JSON, Markdown, and raw HTML; the entire response is retained, including additional fields and metadata. Only content Firecrawl can retrieve is available; private or inaccessible Strava data cannot be recovered.
 
-Source data, normalized activity, and the outbox event commit atomically. Listing activities does not return source blobs. Owned source metadata/JSON is available through `/api/activities/{id}/source`; the original binary is available as an attachment through `/api/activities/{id}/file`. Neither endpoint permits access to another user's activity. Raw HTML is returned as JSON data, never rendered as an HTML page.
+Source references, normalized activity, and the outbox event commit in one PostgreSQL transaction after S3 accepts the file. S3 and PostgreSQL cannot share an atomic transaction: rollback triggers best-effort deletion of uploaded objects, including uploads that timed out after being accepted by S3. A process crash or failed cleanup can leave an unreferenced object; reconcile S3 keys against database references operationally. Listing activities does not return file bytes. Owned source metadata/JSON is available through `/api/activities/{id}/source`; `/api/activities/{id}/file` fetches the original from S3 through an authenticated attachment response. Neither endpoint permits access to another user's activity. Raw HTML is returned as JSON data, never rendered as an HTML page.
 
-Flyway migration V2 adds source storage without rewriting V1 or removing existing activities. Old imports cannot have their discarded source files reconstructed; their source endpoint returns 404 until reimported. The previous H2 runtime database is not automatically migrated into PostgreSQL. Existing local-account activities also require an explicit owner mapping when moving to Cognito subjects; the service does not silently transfer ownership.
+Flyway V3 adds names, S3 references, and photos without rewriting prior migrations. Every minute, a background worker locks up to ten legacy source rows, uploads their database bytes to S3, and clears those bytes only in the transaction that stores the S3 reference. Failed batches retain the bytes and retry on the next pass. Legacy downloads remain available during migration. The nullable `original_file` column is retained solely for this migration; new uploads never populate it. Imports predating V2 cannot have discarded files reconstructed and need reimporting. The previous H2 runtime database is not automatically migrated into PostgreSQL. Existing local-account activities require an explicit owner mapping when moving to Cognito subjects.
+
+## S3, activity names, and photos
+
+Outside Compose, configure `S3_BUCKET` and `AWS_REGION`; production uses the AWS default credential chain. Set `S3_ENDPOINT=http://localhost:4566` only for local development. `infra/s3.yml` provisions a private, encrypted bucket with public access blocked and TLS enforced. Grant the application role `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` on `arn:aws:s3:::YOUR_BUCKET/activities/*`. Delete permission supports rollback cleanup. The application does not create a production bucket automatically.
+
+Objects use generated keys under `activities/{activityId}/source/{uuid}` and `activities/{activityId}/photos/{uuid}`; user filenames never determine an S3 key. Stored URLs are durable S3 locators, not public URLs or expiring signed URLs. Use the authenticated download endpoints to retrieve private content. Uploads request AES-256 server-side encryption. Preserve both the database and bucket when backing up or restoring the service.
+
+Activity `name` is optional, limited to 255 characters, and trimmed; blank or null clears it. Supply it as a multipart `name` field on file import or a JSON `name` field on Strava import. Update it later with `PATCH /api/activities/{id}/name` and `{"name":"Sunday ride"}` (or `{"name":null}` to clear).
+
+Add photos after importing an activity with `POST /api/activities/{id}/photos`, multipart field `file`. Upload one photo per request and repeat for multiple photos. Photos must be readable PNG or JPEG, at most 10 MiB and 20 megapixels. Their actual content is validated independently of their filename. Photos are attachments and do not change the activity's metrics. List metadata and S3 paths with `GET /api/activities/{id}/photos?page=0` and download with `GET /api/activities/{id}/photos/{photoId}/file`. Each operation checks activity ownership; a photo ID must also belong to that activity. Existing Cognito/CSRF rules apply.
+
+```sh
+curl -H "Authorization: Bearer $ACCESS_TOKEN" -F 'name=Sunday ride' -F 'file=@ride.gpx' http://localhost:8080/api/activities/files
+curl -H "Authorization: Bearer $ACCESS_TOKEN" -F 'file=@photo.jpg' http://localhost:8080/api/activities/ACTIVITY_ID/photos
+curl -X PATCH -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Morning ride"}' http://localhost:8080/api/activities/ACTIVITY_ID/name
+```
 
 ## API
 
@@ -71,6 +89,10 @@ Flyway migration V2 adds source storage without rewriting V1 or removing existin
 | GET | `/api/activities/{id}` | Owned normalized activity |
 | GET | `/api/activities/{id}/source` | Owned source metadata, extraction JSON, and coordinates |
 | GET | `/api/activities/{id}/file` | Original file attachment |
+| PATCH | `/api/activities/{id}/name` | Set or clear the optional name |
+| POST | `/api/activities/{id}/photos` | Add a PNG/JPEG photo |
+| GET | `/api/activities/{id}/photos` | List owned photo metadata and S3 paths |
+| GET | `/api/activities/{id}/photos/{photoId}/file` | Download an owned photo |
 | GET | `/api/activities?page=0` | Owned activities, 20 per page |
 | GET | `/oauth2/authorization/cognito` | Cognito browser sign-in |
 | GET | `/oauth/{polar,garmin}/authorize` | Connect a provider after sign-in |
@@ -107,7 +129,7 @@ GPX requires coordinates, elevations, and timestamps. Distance uses Haversine an
 
 FIT uses Garmin's official SDK with CRC/integrity checks. Exactly one cycling session with distance, timer time, and total ascent is required. Optional GPS records become route coordinates and a precision-5 Google encoded polyline. Screenshots do not normally contain exact geographic coordinates, so no route is guessed from map pixels.
 
-Uploads are limited to 20 MiB, screenshots to 4 MiB with PNG/JPEG signature checks, and extracted routes to 100000 points. Original binary content is retained in PostgreSQL rather than discarded or written to container storage.
+Activity uploads are limited to 20 MiB, extraction screenshots to 4 MiB with PNG/JPEG signature checks, and extracted routes to 100000 points. Original file bytes are retained in S3. Additional photos have the separate limits described above.
 
 ## Firecrawl, Groq, and provider connections
 

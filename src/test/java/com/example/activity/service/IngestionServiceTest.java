@@ -16,10 +16,10 @@ class IngestionServiceTest {
         var response = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("extra", "retained");
         when(gpx.parse(bytes)).thenReturn(data); when(fit.parse(bytes)).thenReturn(data); when(groq.extractDetailed(bytes)).thenReturn(new ExtractionResult(data, response));
         when(firecrawl.extractDetailed("url")).thenReturn(new ExtractionResult(data, response));
-        service.file("rider", "RIDE.GPX", bytes); verify(activities).save(eq("rider"), eq("GPX"), eq(data), argThat(s -> java.util.Arrays.equals(s.originalFile(), bytes)));
-        service.file("rider", "ride.fit", bytes); verify(activities).save(eq("rider"), eq("FIT"), eq(data), argThat(s -> java.util.Arrays.equals(s.originalFile(), bytes)));
-        service.file("rider", "ride.png", bytes); verify(activities).save(eq("rider"), eq("SCREENSHOT"), eq(data), argThat(s -> s.providerResponse().equals(response)));
-        service.strava("rider", "url"); verify(activities).save(eq("rider"), eq("STRAVA"), eq(data), argThat(s -> s.sourceUrl().equals("url") && s.providerResponse().equals(response)));
+        service.file("rider", "RIDE.GPX", bytes); verify(activities).save(eq("rider"), eq("GPX"), eq(data), argThat(s -> java.util.Arrays.equals(s.originalFile(), bytes)), isNull());
+        service.file("rider", "ride.fit", bytes); verify(activities).save(eq("rider"), eq("FIT"), eq(data), argThat(s -> java.util.Arrays.equals(s.originalFile(), bytes)), isNull());
+        service.file("rider", "ride.png", bytes); verify(activities).save(eq("rider"), eq("SCREENSHOT"), eq(data), argThat(s -> s.providerResponse().equals(response)), isNull());
+        service.strava("rider", "url"); verify(activities).save(eq("rider"), eq("STRAVA"), eq(data), argThat(s -> s.sourceUrl().equals("url") && s.providerResponse().equals(response)), isNull());
     }
     @Test void rejectsUnsupportedOrEmptyUploadsWithoutSaving() {
         assertThatThrownBy(() -> service.file("rider", "file.txt", new byte[]{1})).isInstanceOf(InvalidActivityException.class);
@@ -33,3 +33,4 @@ class IngestionServiceTest {
         verifyNoInteractions(activities);
     }
 }
+

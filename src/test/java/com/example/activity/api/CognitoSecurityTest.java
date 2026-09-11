@@ -44,10 +44,10 @@ class CognitoSecurityTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.userId").value("cognito-sub"));
     }
     @Test void bearerWritesUseTokenSubjectAndSessionWritesRequireCsrf() throws Exception {
-        when(ingestion.strava("cognito-sub", "url")).thenReturn(TestSupport.activity(1000));
+        when(ingestion.strava("cognito-sub", "url", null)).thenReturn(TestSupport.activity(1000));
         mvc.perform(post("/api/activities/strava").header("Authorization", "Bearer valid-token")
             .contentType(MediaType.APPLICATION_JSON).content("{\"url\":\"url\"}")).andExpect(status().isCreated());
-        verify(ingestion).strava("cognito-sub", "url");
+        verify(ingestion).strava("cognito-sub", "url", null);
         mvc.perform(post("/api/activities/strava").with(oidcLogin()).contentType(MediaType.APPLICATION_JSON)
             .content("{\"url\":\"url\"}")).andExpect(status().isForbidden());
     }
@@ -57,3 +57,4 @@ class CognitoSecurityTest {
             .andExpect(header().string("Location", containsString("state=")));
     }
 }
+

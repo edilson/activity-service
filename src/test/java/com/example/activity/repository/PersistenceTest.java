@@ -19,8 +19,12 @@ class PersistenceTest {
     @Autowired ActivityRepository activities;
     @Autowired OutboxRepository outbox;
     @Autowired ActivitySourceRepository sources;
+    @Autowired ActivityPhotoRepository photos;
+    @Autowired com.example.activity.service.LegacyFileMigration migration;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired ProviderConnectionRepository connections;
     @Autowired PlatformTransactionManager transactionManager;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean com.example.activity.service.ObjectStorageService storage;
     @Test void migratesAndPersistsActivityAndOutbox() {
         String owner = UUID.randomUUID().toString(); var saved = service.save(owner, "GPX", TestSupport.data(100000));
         assertThat(service.get(owner, saved.getId()).getDistanceMeters()).isEqualTo(100000);
@@ -45,11 +49,16 @@ class PersistenceTest {
     @Test void retainsBinaryAndAdditionalProviderDataWithoutExposingOtherOwners() throws Exception {
         var json = new com.fasterxml.jackson.databind.ObjectMapper();
         byte[] binary = {0, 1, -1, 42};
+        var stored = new StoredFile("test-bucket", "source/key", "s3://test-bucket/source/key", 4L);
+        org.mockito.Mockito.when(storage.upload(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("source"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString())).thenReturn(stored);
+        org.mockito.Mockito.when(storage.download(stored)).thenReturn(binary);
         var response = json.readTree("{\"data\":{\"heartRate\":157,\"unknownField\":[1,2]},\"rawHtml\":\"<p>ride</p>\"}");
         var data = new ActivityData(120000.0, 3600.0, 123.0, java.util.List.of(new RoutePoint(-3.7, -38.5), new RoutePoint(-3.8, -38.6)));
         var saved = service.save("source-owner", "FIT", data, new SourceData("ride.fit", "application/octet-stream", binary, "https://source.test", response));
         var source = service.source("source-owner", saved.getId());
-        assertThat(source.getOriginalFile()).containsExactly(binary);
+        assertThat(source.getOriginalFile()).isNull();
+        assertThat(source.getFile()).isEqualTo(stored);
+        assertThat(service.download("source-owner", saved.getId())).containsExactly(binary);
         assertThat(source.getProviderResponse()).isEqualTo(response);
         assertThat(source.getRoute().size()).isEqualTo(2);
         assertThat(source.getFilename()).isEqualTo("ride.fit");
@@ -64,5 +73,28 @@ class PersistenceTest {
             assertThat(connections.findByOwnerAndProvider("oauth-rider", "garmin")).isPresent();
             assertThat(connections.findByOwnerAndProvider("wrong-owner", "garmin")).isEmpty();
         });
+    }
+    @Test void migratesLegacyBytesOnlyAfterSuccessfulS3Upload() {
+        var saved = service.save("legacy-owner", "GPX", TestSupport.data(1000));
+        byte[] old = {1, 2, 3};
+        jdbc.update("update activity_sources set original_file = ?, content_type = ? where activity_id = ?", old, "application/gpx+xml", saved.getId());
+        org.mockito.Mockito.when(storage.upload(org.mockito.ArgumentMatchers.eq(saved.getId()), org.mockito.ArgumentMatchers.eq("source"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new com.example.activity.ingestion.UpstreamException("S3 unavailable"));
+        assertThatThrownBy(() -> migration.migrate()).isInstanceOf(com.example.activity.ingestion.UpstreamException.class);
+        assertThat(sources.findById(saved.getId()).orElseThrow().getOriginalFile()).containsExactly(old);
+        var file = new StoredFile("bucket", "key", "s3://bucket/key", 3L);
+        org.mockito.Mockito.when(storage.upload(org.mockito.ArgumentMatchers.eq(saved.getId()), org.mockito.ArgumentMatchers.eq("source"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString())).thenReturn(file);
+        migration.migrate();
+        var migrated = sources.findById(saved.getId()).orElseThrow();
+        assertThat(migrated.getFile()).isEqualTo(file); assertThat(migrated.getOriginalFile()).isNull();
+    }
+    @Test void persistsOptionalNameAndPhotoPaths() {
+        var activity = service.save("photo-owner", "GPX", TestSupport.data(1000), new SourceData(null, null, null, null, null), "Evening ride");
+        assertThat(service.get("photo-owner", activity.getId()).getName()).isEqualTo("Evening ride");
+        var file = new StoredFile("bucket", "photo/key", "s3://bucket/photo/key", 123L);
+        var photo = photos.saveAndFlush(new ActivityPhoto(activity.getId(), "ride.jpg", "image/jpeg", file));
+        assertThat(photos.findByIdAndActivityId(photo.getId(), activity.getId()).orElseThrow().getFile()).isEqualTo(file);
+        assertThat(photos.findByIdAndActivityId(photo.getId(), UUID.randomUUID())).isEmpty();
+        assertThat(photos.findByActivityId(activity.getId(), PageRequest.of(0, 20))).hasSize(1);
     }
 }

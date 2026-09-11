@@ -20,22 +20,25 @@ import java.util.UUID;
 public class ActivityController {
     private final IngestionService ingestion; private final ActivityService activities;
     public ActivityController(IngestionService ingestion, ActivityService activities) { this.ingestion = ingestion; this.activities = activities; }
-    public record StravaRequest(@NotBlank @Size(max = 2048) String url) {}
+    public record StravaRequest(@NotBlank @Size(max = 2048) String url, @Size(max = 255) String name) {}
+    public record NameRequest(@Size(max = 255) String name) {}
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Activity> upload(Principal principal, @RequestPart("file") MultipartFile file) throws IOException {
-        return created(ingestion.file(principal.getName(), file.getOriginalFilename(), file.getBytes()));
+    public ResponseEntity<Activity> upload(Principal principal, @RequestPart("file") MultipartFile file, @RequestParam(required = false) String name) throws IOException {
+        return created(ingestion.file(principal.getName(), file.getOriginalFilename(), file.getBytes(), name));
     }
     @PostMapping("/strava")
-    public ResponseEntity<Activity> strava(Principal principal, @Valid @RequestBody StravaRequest body) { return created(ingestion.strava(principal.getName(), body.url())); }
+    public ResponseEntity<Activity> strava(Principal principal, @Valid @RequestBody StravaRequest body) { return created(ingestion.strava(principal.getName(), body.url(), body.name())); }
+    @PatchMapping("/{id}/name")
+    public Activity rename(Principal principal, @PathVariable UUID id, @Valid @RequestBody NameRequest body) {
+        return activities.rename(principal.getName(), id, body.name());
+    }
     @GetMapping("/{id}")
     public Activity get(Principal principal, @PathVariable UUID id) { return activities.get(principal.getName(), id); }
     @GetMapping("/{id}/source")
     public ActivitySource source(Principal principal, @PathVariable UUID id) { return activities.source(principal.getName(), id); }
     @GetMapping("/{id}/file")
     public ResponseEntity<byte[]> originalFile(Principal principal, @PathVariable UUID id) {
-        var source = activities.source(principal.getName(), id);
-        byte[] bytes = source.getOriginalFile();
-        if (bytes == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "This activity has no uploaded file");
+        byte[] bytes = activities.download(principal.getName(), id);
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
             .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("activity-" + id).build().toString())
             .header(HttpHeaders.CACHE_CONTROL, "no-store").body(bytes);
