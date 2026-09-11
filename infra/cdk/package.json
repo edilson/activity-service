@@ -1,0 +1,1 @@
+{"name":"activity-service-cdk-cli","version":"1.0.0","private":true,"description":"Pinned CDK CLI; infrastructure and tests are Java/Maven","scripts":{"synth":"cdk synth","deploy":"cdk deploy ActivityService --require-approval never"},"devDependencies":{"aws-cdk":"2.1128.1"}}

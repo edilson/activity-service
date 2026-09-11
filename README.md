@@ -13,7 +13,7 @@ docker compose up --build -d
 docker compose logs -f app
 ```
 
-Compose builds the non-root application container, starts PostgreSQL 17 and LocalStack with named data volumes, creates both FIFO queues and the `activity-files` S3 bucket, waits for dependencies, and exposes the application at http://localhost:8080. Ports are bound to localhost. The app connects to `postgres:5432` and `localstack:4566` inside the Docker network. `SQS_ENABLED=true` enables local publishing; otherwise events remain pending in PostgreSQL. File imports and photo uploads always require S3, regardless of the SQS setting.
+Compose builds the non-root application container, starts PostgreSQL 17 and LocalStack with named data volumes, creates the standard short-activity queue and FIFO long-activity queue and the `activity-files` S3 bucket, waits for dependencies, and exposes the application at http://localhost:8080. Ports are bound to localhost. The app connects to `postgres:5432` and `localstack:4566` inside the Docker network. `SQS_ENABLED=true` enables local publishing; otherwise events remain pending in PostgreSQL. File imports and photo uploads always require S3, regardless of the SQS setting.
 
 For offline development without an AWS account, explicitly set `AUTH_MODE=local` and a strong `API_PASSWORD` in `.env`. This enables the single local HTTP Basic account (`API_USERNAME`, default `activity`). Cognito is the default authentication mode; local authentication is not enabled alongside Cognito.
 
@@ -55,7 +55,7 @@ Browser/session writes require CSRF protection: get `/api/csrf`, retain its sess
 - `activity_photos`: activity ID, filename, detected content type, S3 bucket/key/URL, byte size, and creation time. Each activity can have multiple photos.
 - GPX and FIT originals retain all source fields, including extension/developer fields and samples that are not mapped into normalized columns. Download the original for complete reprocessing.
 - Groq responses retain all returned fields and the extracted JSON text. The extraction prompt requests additional visible activity fields (heart rate, cadence, speed, power, device, date, splits, etc.). The original screenshot is also retained because OCR cannot guarantee that every visible value is extracted accurately.
-- Firecrawl requests structured JSON, Markdown, and raw HTML; the entire response is retained, including additional fields and metadata. Only content Firecrawl can retrieve is available; private or inaccessible Strava data cannot be recovered.
+- Firecrawl requests structured JSON, Markdown, and raw HTML; the SDK document is retained, including structured JSON, Markdown, raw HTML, and metadata (unknown fields discarded by the SDK are not retained). Only content Firecrawl can retrieve is available; private or inaccessible Strava data cannot be recovered.
 
 Source references, normalized activity, and the outbox event commit in one PostgreSQL transaction after S3 accepts the file. S3 and PostgreSQL cannot share an atomic transaction: rollback triggers best-effort deletion of uploaded objects, including uploads that timed out after being accepted by S3. A process crash or failed cleanup can leave an unreferenced object; reconcile S3 keys against database references operationally. Listing activities does not return file bytes. Owned source metadata/JSON is available through `/api/activities/{id}/source`; `/api/activities/{id}/file` fetches the original from S3 through an authenticated attachment response. Neither endpoint permits access to another user's activity. Raw HTML is returned as JSON data, never rendered as an HTML page.
 
@@ -133,7 +133,7 @@ Activity uploads are limited to 20 MiB, extraction screenshots to 4 MiB with PNG
 
 ## Firecrawl, Groq, and provider connections
 
-Set `FIRECRAWL_API_KEY` and `GROQ_API_KEY`. Firecrawl uses `/v2/scrape`. Submit full HTTPS `strava.com/activities/{id}` URLs; expand short/share links first. URL query parameters are removed from the scraping request, while the original submitted URL is retained in owned source storage. Upload GPX/FIT for private or login-only rides.
+Set `FIRECRAWL_API_KEY` and `GROQ_API_KEY`. Firecrawl uses the official `com.firecrawl:firecrawl-java:1.12.1` SDK and its single-page `scrape` operation (`/v2/scrape`). SDK retries and connection retries are disabled. Submit full HTTPS `strava.com/activities/{id}` URLs; expand short/share links first. URL query parameters are removed from the scraping request, while the original submitted URL is retained in owned source storage. Upload GPX/FIT for private or login-only rides.
 
 Groq uses base64 image input and JSON mode at `/openai/v1/chat/completions`. `GROQ_VISION_MODEL` defaults to `qwen/qwen3.6-27b`. Outbound connect/read deadlines are 10/90 seconds; failed paid extractions are not retried automatically.
 
@@ -141,15 +141,15 @@ For Polar/Garmin, set their client IDs/secrets, `PUBLIC_BASE_URL`, and a base64-
 
 Provider state is bound to the browser session, expires in ten minutes, and is consumed once. Garmin uses PKCE, user-ID lookup, and an explicit refresh endpoint with row locking. Polar uses Basic client authentication and registers the user with AccessLink. These connections do not automatically import provider history or subscribe to webhooks. Garmin requires developer-program approval and Polar requires an AccessLink client and user consents. Pending sessions are in memory; multiple instances need sticky sessions or shared session storage.
 
-## SQS FIFO
+## SQS queues
 
-The local stack initializes `activities-short.fifo` and `activities-long.fifo`. Enable publishing with `SQS_ENABLED=true`. For AWS, `infra/sqs.yml` provisions two encrypted FIFO queues with FIFO dead-letter queues and redrive after five failed receives. Supply the resulting URLs, region, and workload credentials; grant `sqs:SendMessage` on both ARNs.
+The local stack initializes `activities-short` and `activities-long.fifo`. Enable publishing with `SQS_ENABLED=true`. For AWS, `infra/sqs.yml` provisions an encrypted standard short queue and FIFO long queue with matching dead-letter queue types and redrive after five failed receives. Supply the resulting URLs, region, and workload credentials; grant `sqs:SendMessage` on both ARNs.
 
 - Short queue: distance **< 100000 meters**.
 - Long queue: distance **>= 100000 meters**, including exactly 100 km.
-- Message group: stable owner hash; deduplication ID: persistent event UUID.
+- Long queue only: message group is the stable owner hash; deduplication ID is the persistent event UUID. Short queue sends omit both FIFO fields.
 
-The dispatcher locks up to 20 due outbox rows every five seconds. Failed sends back off up to one hour. Disabled SQS leaves events pending. Messages contain an activity reference and distance, avoiding large route payloads. Downstream consumers must deduplicate persistent event IDs because a crash after SQS acceptance can cause later redelivery beyond the five-minute SQS deduplication window. FIFO preserves SQS acceptance order within a group, not original import order across retries or separate queues. Published outbox rows are retained; configure retention and pending-age monitoring for your deployment.
+The dispatcher locks up to 20 due outbox rows every five seconds. Failed sends back off up to one hour. Disabled SQS leaves events pending. Messages contain an activity reference and distance, avoiding large route payloads. Downstream consumers must deduplicate persistent event IDs because a crash after SQS acceptance can cause later redelivery beyond the five-minute SQS deduplication window. The standard short queue provides at-least-once delivery without ordering. The long FIFO queue preserves SQS acceptance order within a group, not original import order across retries or separate queues. Published outbox rows are retained; configure retention and pending-age monitoring for your deployment.
 
 ## Build and tests
 
@@ -175,3 +175,7 @@ To run outside Docker, start PostgreSQL, export `DATABASE_URL`, `DATABASE_USERNA
 - [Garmin FIT SDK](https://github.com/garmin/fit-java-sdk)
 - [Polar AccessLink](https://www.polar.com/accesslink-api/)
 - [Garmin OAuth2 PKCE](https://developerportal.garmin.com/sites/default/files/OAuth2PKCE_1.pdf)
+
+## Automated AWS deployment
+
+GitHub Actions runs unit tests, PostgreSQL integration tests, CDK assertions/synthesis, and a Docker build as a mandatory dependency of deployment. Successful runs on main deploy the application and infrastructure with CDK using AWS OIDC. See [CDK setup and deployment](infra/cdk/README.md) for the one-time AWS/GitHub configuration and migration notes.

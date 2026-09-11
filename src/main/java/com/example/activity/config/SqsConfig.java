@@ -13,13 +13,22 @@ public class SqsConfig {
     @Bean
     public SqsClient sqsClient(ServiceProperties properties) {
         var config = properties.sqs();
-        if (config.shortQueueUrl() == null || !config.shortQueueUrl().endsWith(".fifo") || config.longQueueUrl() == null
-            || !config.longQueueUrl().endsWith(".fifo") || config.shortQueueUrl().equals(config.longQueueUrl()))
-            throw new IllegalArgumentException("Two distinct FIFO queue URLs are required");
+        if (!validQueueUrl(config.shortQueueUrl(), false) || !validQueueUrl(config.longQueueUrl(), true))
+            throw new IllegalArgumentException("A standard short queue URL and a FIFO long queue URL are required");
         var builder = SqsClient.builder().region(Region.of(config.region()))
             .overrideConfiguration(ClientOverrideConfiguration.builder().apiCallTimeout(Duration.ofSeconds(20))
                 .apiCallAttemptTimeout(Duration.ofSeconds(8)).build());
         if (config.endpoint() != null && !config.endpoint().toString().isBlank()) builder.endpointOverride(config.endpoint());
         return builder.build();
+    }
+    private static boolean validQueueUrl(String value, boolean fifo) {
+        if (value == null || value.isBlank()) return false;
+        try {
+            var uri = java.net.URI.create(value);
+            return ("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) && uri.getHost() != null
+                && uri.getQuery() == null && uri.getFragment() == null && uri.getUserInfo() == null
+                && uri.getPath() != null && uri.getPath().length() > 1 && !uri.getPath().endsWith("/")
+                && uri.getPath().endsWith(".fifo") == fifo;
+        } catch (IllegalArgumentException e) { return false; }
     }
 }

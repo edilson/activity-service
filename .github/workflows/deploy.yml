@@ -1,0 +1,85 @@
+name: Test and deploy
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Unit and PostgreSQL integration tests
+        run: bash ./mvnw -B -Ppostgres-it verify
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/cdk/package-lock.json
+      - run: npm ci
+        working-directory: infra/cdk
+      - name: CDK infrastructure assertions and synthesis
+        run: bash ../../mvnw -B verify
+        working-directory: infra/cdk
+      - name: Build application image
+        run: docker build -t activity-service:${{ github.sha }} .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports
+            target/failsafe-reports
+            target/site/jacoco
+            infra/cdk/target/surefire-reports
+  deploy:
+    needs: quality-gate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    concurrency:
+      group: activity-service-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      APP_DOMAIN_NAME: ${{ vars.APP_DOMAIN_NAME }}
+      HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
+      HOSTED_ZONE_NAME: ${{ vars.HOSTED_ZONE_NAME }}
+      PROVIDER_SECRET_ARN: ${{ vars.PROVIDER_SECRET_ARN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/cdk/package-lock.json
+      - run: npm ci
+        working-directory: infra/cdk
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy infrastructure and application; wait for stabilization
+        run: npm run deploy -- --outputs-file outputs.json
+        working-directory: infra/cdk
+      - name: Verify public health endpoint
+        shell: bash
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 10 "https://${APP_DOMAIN_NAME}/actuator/health"
+
+

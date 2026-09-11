@@ -20,9 +20,12 @@ public class SqsPublisher {
         try {
             String payload = json.writeValueAsString(Map.of("schemaVersion", 1, "eventId", event.getId(), "activityId", event.getActivityId(),
                 "type", "ActivityImported", "distanceMeters", event.getDistanceMeters(), "createdAt", event.getCreatedAt().toString()));
-            sqs.sendMessage(SendMessageRequest.builder().queueUrl(queue).messageBody(payload)
-                .messageGroupId(UUID.nameUUIDFromBytes(event.getOwner().getBytes(StandardCharsets.UTF_8)).toString())
-                .messageDeduplicationId(event.getId().toString()).build());
+            var request = SendMessageRequest.builder().queueUrl(queue).messageBody(payload);
+            if (event.getDistanceMeters() >= 100000) {
+                request.messageGroupId(UUID.nameUUIDFromBytes(event.getOwner().getBytes(StandardCharsets.UTF_8)).toString())
+                    .messageDeduplicationId(event.getId().toString());
+            }
+            sqs.sendMessage(request.build());
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw new IllegalStateException("Cannot serialize activity event", e); }
     }
 }

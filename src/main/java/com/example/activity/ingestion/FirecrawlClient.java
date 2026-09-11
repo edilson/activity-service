@@ -4,16 +4,27 @@ import com.example.activity.config.ServiceProperties;
 import com.example.activity.domain.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.*;
-import org.springframework.http.MediaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.firecrawl.models.ScrapeOptions;
+import com.firecrawl.errors.FirecrawlException;
+import okhttp3.OkHttpClient;
+import java.util.concurrent.TimeUnit;
 import java.net.URI;
 import java.util.*;
 
 @Service
 public class FirecrawlClient {
-    private final RestClient http; private final ServiceProperties properties; private final ExtractionMapper mapper;
-    public FirecrawlClient(RestClient http, ServiceProperties properties, ExtractionMapper mapper) {
-        this.http = http; this.properties = properties; this.mapper = mapper;
+    private final com.firecrawl.client.FirecrawlClient sdk;
+    private final ServiceProperties properties; private final ExtractionMapper mapper; private final ObjectMapper json;
+    public FirecrawlClient(ServiceProperties properties, ExtractionMapper mapper, ObjectMapper json) {
+        this.properties = properties; this.mapper = mapper; this.json = json;
+        var api = properties.firecrawl();
+        this.sdk = com.firecrawl.client.FirecrawlClient.builder()
+            .apiKey(api.apiKey() == null || api.apiKey().isBlank() ? "not-configured" : api.apiKey())
+            .apiUrl(api.baseUrl().toString()).maxRetries(0)
+            .httpClient(new OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(90, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()).build();
     }
     public ActivityData extract(String url) {
         return extractDetailed(url).data();
@@ -27,14 +38,14 @@ public class FirecrawlClient {
         var api = properties.firecrawl();
         if (api.apiKey() == null || api.apiKey().isBlank()) throw new UpstreamException("Firecrawl is not configured");
         try {
-            var response = http.post().uri(api.baseUrl().resolve("/v2/scrape"))
-                .headers(h -> h.setBearerAuth(api.apiKey())).contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("url", "https://www.strava.com" + uri.getPath(), "storeInCache", false,
-                    "formats", List.of("markdown", "rawHtml", Map.of("type", "json", "prompt", ExtractionMapper.PROMPT, "schema", mapper.schema()))))
-                .retrieve().body(JsonNode.class);
-            if (response == null || !response.path("success").asBoolean() || !response.path("data").path("json").isObject())
+            var document = sdk.scrape("https://www.strava.com" + uri.getPath(), ScrapeOptions.builder()
+                .storeInCache(false).formats(List.of("markdown", "rawHtml",
+                    Map.of("type", "json", "prompt", ExtractionMapper.PROMPT, "schema", mapper.schema()))).build());
+            JsonNode data = json.valueToTree(document);
+            if (document == null || !data.path("json").isObject())
                 throw new UpstreamException("Firecrawl did not return activity data");
-            return new ExtractionResult(mapper.map(response.path("data").path("json")), response);
-        } catch (RestClientException e) { throw new UpstreamException("Firecrawl request failed; retry later or upload the activity file"); }
+            var response = json.createObjectNode().put("success", true).set("data", data);
+            return new ExtractionResult(mapper.map(data.path("json")), response);
+        } catch (FirecrawlException e) { throw new UpstreamException("Firecrawl request failed; retry later or upload the activity file"); }
     }
 }

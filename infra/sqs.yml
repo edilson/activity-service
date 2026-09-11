@@ -1,11 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: FIFO cycling activity queues and dead-letter queues
+Description: Standard short activity queue and FIFO long activity queue with matching dead-letter queues
 Resources:
   ShortRideDeadLetters:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub '${AWS::StackName}-short-dlq.fifo'
-      FifoQueue: true
+      QueueName: !Sub '${AWS::StackName}-short-dlq'
       SqsManagedSseEnabled: true
       MessageRetentionPeriod: 1209600
   LongRideDeadLetters:
@@ -18,9 +17,7 @@ Resources:
   ShortRides:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub '${AWS::StackName}-short.fifo'
-      FifoQueue: true
-      ContentBasedDeduplication: false
+      QueueName: !Sub '${AWS::StackName}-short'
       SqsManagedSseEnabled: true
       VisibilityTimeout: 120
       ReceiveMessageWaitTimeSeconds: 20

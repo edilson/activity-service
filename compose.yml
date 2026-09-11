@@ -32,7 +32,7 @@ services:
       SQS_ENDPOINT: http://localstack:4566
       S3_ENDPOINT: http://localstack:4566
       S3_BUCKET: activity-files
-      SQS_SHORT_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/activities-short.fifo
+      SQS_SHORT_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/activities-short
       SQS_LONG_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/activities-long.fifo
     depends_on:
       postgres:
@@ -86,7 +86,7 @@ services:
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        aws --endpoint-url http://localstack:4566 sqs create-queue --queue-name activities-short.fifo --attributes FifoQueue=true
+        aws --endpoint-url http://localstack:4566 sqs create-queue --queue-name activities-short
         aws --endpoint-url http://localstack:4566 sqs create-queue --queue-name activities-long.fifo --attributes FifoQueue=true
         aws --endpoint-url http://localstack:4566 s3api head-bucket --bucket activity-files 2>/dev/null || aws --endpoint-url http://localstack:4566 s3api create-bucket --bucket activity-files
     depends_on:

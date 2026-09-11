@@ -18,8 +18,12 @@ class SqsPublisherTest {
         var publisher = new SqsPublisher(sqs, TestSupport.properties(), json); var event = new OutboxEvent(TestSupport.activity(distance));
         publisher.publish(event); publisher.publish(event);
         var captor = ArgumentCaptor.forClass(SendMessageRequest.class); verify(sqs, times(2)).sendMessage(captor.capture());
-        var request = captor.getValue(); assertThat(request.queueUrl()).isEqualTo("https://sqs.test/" + queue + ".fifo");
-        assertThat(request.messageDeduplicationId()).isEqualTo(event.getId().toString()); assertThat(request.messageGroupId()).isNotBlank();
+        var request = captor.getValue(); assertThat(request.queueUrl()).isEqualTo("https://sqs.test/" + queue + (queue.equals("long") ? ".fifo" : ""));
+        if (queue.equals("long")) {
+            assertThat(request.messageDeduplicationId()).isEqualTo(event.getId().toString()); assertThat(request.messageGroupId()).isNotBlank();
+        } else {
+            assertThat(request.messageDeduplicationId()).isNull(); assertThat(request.messageGroupId()).isNull();
+        }
         assertThat(captor.getAllValues().getFirst()).isEqualTo(request);
         assertThat(json.readTree(request.messageBody()).path("activityId").asText()).isEqualTo(event.getActivityId().toString());
     }
